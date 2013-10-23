@@ -1,6 +1,6 @@
 <?php
-$key = openssl_pkey_get_private(file_get_contents('f:/key.priv'));
-$responses = file('f:/encrypted.dat', FILE_IGNORE_NEW_LINES + FILE_SKIP_EMPTY_LINES);
+$key = openssl_pkey_get_private(file_get_contents('key.priv'));
+$responses = file('encrypted.dat', FILE_IGNORE_NEW_LINES + FILE_SKIP_EMPTY_LINES);
 $errors = 0;
 $handle = fopen('php://stdout', 'w');
 $first = true;
