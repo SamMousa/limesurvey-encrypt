@@ -20,7 +20,7 @@
          */
         protected $settings = array(
             'publicKey' => array(
-                'type' => 'html',
+                'type' => 'text',
                 'label' => 'Public key'
             ),
            );
@@ -88,7 +88,8 @@
             }
 
             $this->event->setContent($this, 'Response could not be encrypted.');
-
+            $this->event->setContent($this, openssl_error_string());
+            
 
 
         }
