@@ -45,20 +45,46 @@
             $this->subscribe('newDirectRequest');
         }
 
+        protected function getData($surveyId)
+        {
+            $table = $this->api->getTable($this, 'responses');
+            $responses = $table->findAllByAttributes(array(
+                'survey_id' => $surveyId
+            ));
+            $data = '';
+            return implode('.', array_map(function($response) { return base64_encode($response->response); }, $responses));
+        }
+        
+        public function actionExportScript($surveyId)
+        {
+            $data = $this->getData($surveyId);
+
+            $script = file(__DIR__ . '/decrypt.php', FILE_IGNORE_NEW_LINES);
+            // Remove first line.
+            array_shift($script);
+
+            $script[] = 'decryptResponses($privateKey, \'' . $data . '\', $handle);';
+
+            $lines = [];
+            $lines[] = '@echo off';
+            $lines['call'] = "php -r \"\$f = fopen('%~0', 'rb'); fseek(\$f, ----------); \$code = stream_get_contents(\$f); eval(\$code); \"";
+            $lines[] = 'exit';
+            $offset = strlen(implode("\n", $lines)) - 1;
+            $lines['call'] = strtr($lines['call'], ['----------' => $offset]);
+            // Add data.
+            $lines = array_merge($lines, $script);
+            $lines[] = 'fgets($stdin);';
+            $this->event->get('request')->sendFile('encrypted.cmd',  implode("\n", $lines), 'text/plain', true);
+        }
 
         public function actionExport($surveyId)
         {
-            $table = $this->api->getTable($this, 'responses');
-            $data = $table->findAllByAttributes(array(
-                'survey_id' => $surveyId
-            ));
-            $content = '';
-            foreach ($data as $record)
-            {
-                $content.= base64_encode($record->response) . "\n";
-            }
-            $this->event->get('request')->sendFile('encrypted.dat', $content, 'text/plain', true);
+            $this->actionExportScript($surveyId);
+            return;
+            $data = $this->getData($surveyId);
+            $this->event->get('request')->sendFile('encrypted.dat', $data, 'text/plain', true);
         }
+
         /**
          * This event is fired after the survey has been completed.
          * @param PluginEvent $event
@@ -73,25 +99,21 @@
 
             // Get the response information.
             $response = $this->api->getResponse($event->get('surveyId'), $event->get('responseId'));
-            if (openssl_public_encrypt(json_encode($response),$crypted, $this->get('publicKey')))
-            {
-                $encrypted = $this->pluginManager->getAPI()->newModel($this, 'responses');
-                $encrypted->response = $crypted;
-                $encrypted->survey_id = $event->get('surveyId');
-                if ($encrypted->save())
-                {
-                    $this->pluginManager->getAPI()->removeResponse($event->get('surveyId'), $event->get('responseId'));
-                    $this->event->setContent($this, 'Response has been encrypted.');
-                    return;
-                }
-
-            }
-
-            $this->event->setContent($this, 'Response could not be encrypted.');
-            $this->event->setContent($this, openssl_error_string());
+            $publicKey = $this->get('publicKey');
             
+            $data = json_encode($response);
 
+            $encryptedResponse = $this->pluginManager->getAPI()->newModel($this, 'responses');
+            $encryptedResponse->response = $this->encrypt($publicKey, $data);
+            $encryptedResponse->survey_id = $event->get('surveyId');
 
+            if ($encryptedResponse->save())
+            {
+                $this->pluginManager->getAPI()->removeResponse($event->get('surveyId'), $event->get('responseId'));
+                $this->event->setContent($this, 'Response has been encrypted.');
+                return;
+            }
+            $this->event->setContent($this, openssl_error_string());
         }
 
         public function beforeActivate()
@@ -142,6 +164,26 @@
 
         }
 
+        protected function encrypt($publicKey, $data)
+        {
+            // Generate a random password for symmetric encryption.
+            $symmetricKey = openssl_random_pseudo_bytes(50);
+            $encryptedKey = '';
+            if (openssl_public_encrypt($symmetricKey, $encryptedKey, $publicKey))
+            {
+                // Use the encrypted key as basis for the IV.
+                $iv = substr($encryptedKey, 0, mcrypt_get_iv_size(MCRYPT_BLOWFISH, MCRYPT_MODE_CBC));
+                $encryptedData = mcrypt_encrypt(MCRYPT_BLOWFISH, $symmetricKey, $data, MCRYPT_MODE_CBC, $iv);
+                // Key has constant length so no separator is necessary.
+                return $encryptedKey . $encryptedData;
+            }
+            /**
+             * @todo Proper error handling.
+             * 
+             */
+            
+
+        }
         public function newDirectRequest()
         {
             $event = $this->event;
